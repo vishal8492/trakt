@@ -1,0 +1,70 @@
+/* ==UserStyle==
+@name         Trakt.tv - Big Posters (Old Style)
+@namespace    trakt-big-posters
+@version      1.6.0
+@description  Makes posters on app.trakt.tv bigger like the old website version
+@author       You
+@homepageURL  https://app.trakt.tv
+==/UserStyle== */
+
+@-moz-document domain("app.trakt.tv") {
+
+  /* Force size variables everywhere */
+  *, *::before, *::after {
+    --width-item: 300px !important;
+    --width-card: 300px !important;
+    --width-override-card: 300px !important;
+    --height-card-cover: 450px !important;
+    --height-override-card-cover: 450px !important;
+    --height-summary-card-cover: 450px !important;
+    --height-card: 520px !important;
+    --height-override-card: 520px !important;
+    --section-list-height: 520px !important;
+  }
+
+  /* ===== GRID PAGES ===== */
+  [class*="trakt-list-items"] {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)) !important;
+    grid-column-gap: 24px !important;
+    grid-row-gap: 32px !important;
+  }
+
+  /* ===== HORIZONTAL SCROLL SECTIONS ===== */
+  [class*="section-list-horizontal-scroll"] {
+    display: flex !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    height: 520px !important;
+    gap: 20px !important;
+  }
+
+  [class*="section-list-horizontal-scroll"] > * {
+    min-width: 300px !important;
+    width: 300px !important;
+    flex-shrink: 0 !important;
+  }
+
+  [class*="section-list-container"] {
+    height: auto !important;
+    min-height: 540px !important;
+  }
+
+  /* Remove max-width caps */
+  trakt-default-media-item,
+  [class*="media-item"],
+  [class*="media-card"] {
+    max-width: none !important;
+    width: 100% !important;
+  }
+
+  /* ===== MOBILE ===== */
+  @media (max-width: 480px) {
+    [class*="trakt-list-items"] {
+      grid-template-columns: 1fr !important;
+    }
+    [class*="section-list-horizontal-scroll"] > * {
+      min-width: 200px !important;
+      width: 200px !important;
+    }
+  }
+}
