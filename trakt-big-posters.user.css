@@ -1,11 +1,25 @@
 /* ==UserStyle==
 @name         Trakt.tv - Big Posters (Old Style)
 @namespace    trakt-big-posters
-@version      4.0.0
+@version      5.2.0
 @description  Makes posters on app.trakt.tv bigger like the old website version
 @author       You
 @homepageURL  https://app.trakt.tv
 ==/UserStyle== */
+
+/*
+  === SIZE OPTIONS ===
+  Change the numbers below to adjust sizes:
+
+  LANDSCAPE (Continue Watching, History, etc):
+    S = 6    M = 5    L = 4 (default)    XL = 3    XXL = 2
+
+  PORTRAIT (Start Watching):
+    S = 8    M = 7    L = 6 (default)    XL = 5    XXL = 4
+
+  GRID PAGES:
+    S = 8    M = 7    L = 6 (default)    XL = 5    XXL = 4
+*/
 
 @-moz-document domain("app.trakt.tv") {
 
@@ -16,19 +30,21 @@
   }
 
   /* ===== LANDSCAPE SECTIONS (Continue Watching, History, etc) ===== */
+  /* Change /4 to /3 for XL, /5 for M, etc */
   [style*="landscape-list"] *,
   [style*="landscape-list"] {
-    --width-item: calc((100vw - 120px) / 3) !important;
-    --width-card: calc((100vw - 120px) / 3) !important;
-    --width-override-card: calc((100vw - 120px) / 3) !important;
-    --height-card-cover: calc(((100vw - 120px) / 3) * 0.5625) !important;
-    --height-override-card-cover: calc(((100vw - 120px) / 3) * 0.5625) !important;
-    --height-card: calc(((100vw - 120px) / 3) * 0.5625 + 70px) !important;
-    --height-override-card: calc(((100vw - 120px) / 3) * 0.5625 + 70px) !important;
-    --section-list-height: calc(((100vw - 120px) / 3) * 0.5625 + 70px) !important;
+    --width-item: calc((100vw - 148px) / 4) !important;
+    --width-card: calc((100vw - 148px) / 4) !important;
+    --width-override-card: calc((100vw - 148px) / 4) !important;
+    --height-card-cover: calc(((100vw - 148px) / 4) * 0.5625) !important;
+    --height-override-card-cover: calc(((100vw - 148px) / 4) * 0.5625) !important;
+    --height-card: calc(((100vw - 148px) / 4) * 0.5625 + 70px) !important;
+    --height-override-card: calc(((100vw - 148px) / 4) * 0.5625 + 70px) !important;
+    --section-list-height: calc(((100vw - 148px) / 4) * 0.5625 + 70px) !important;
   }
 
   /* ===== PORTRAIT SECTIONS (Start Watching) ===== */
+  /* Change /6 to /5 for XL, /7 for M, etc */
   [style*="poster-list"] *,
   [style*="poster-list"] {
     --width-item: calc((100vw - 180px) / 6) !important;
@@ -41,7 +57,8 @@
     --section-list-height: calc(((100vw - 180px) / 6) * 1.5 + 70px) !important;
   }
 
-  /* ===== GRID PAGES - 6 per row, poster sizes ===== */
+  /* ===== GRID PAGES ===== */
+  /* Change repeat(6, ...) and /6 to desired number */
   [class*="trakt-list-items"] {
     grid-template-columns: repeat(6, 1fr) !important;
     grid-column-gap: 16px !important;
@@ -53,10 +70,10 @@
     --width-item: calc((100vw - 180px) / 6) !important;
     --width-card: calc((100vw - 180px) / 6) !important;
     --width-override-card: calc((100vw - 180px) / 6) !important;
-    --height-card-cover: 330px !important;
-    --height-override-card-cover: 330px !important;
-    --height-card: 400px !important;
-    --height-override-card: 400px !important;
+    --height-card-cover: calc(((100vw - 180px) / 6) * 1.5) !important;
+    --height-override-card-cover: calc(((100vw - 180px) / 6) * 1.5) !important;
+    --height-card: calc(((100vw - 180px) / 6) * 1.5 + 70px) !important;
+    --height-override-card: calc(((100vw - 180px) / 6) * 1.5 + 70px) !important;
   }
 
   /* ===== HORIZONTAL SCROLL SECTIONS ===== */
@@ -65,11 +82,6 @@
     flex-direction: row !important;
     overflow-x: auto !important;
     gap: 16px !important;
-  }
-
-  [class*="section-list-container"] {
-    height: auto !important;
-    min-height: auto !important;
   }
 
   /* Remove max-width caps */
