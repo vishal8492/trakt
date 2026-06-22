@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trakt Uncapped Trending
 // @namespace    https://github.com/vishal/trakt-uncapped
-// @version      1.5.0
+// @version      1.6.0
 // @description  Browse Trakt's most-watched shows (no 50-watcher floor) — paginated, jump-to-page, posters + ratings with IMDb links, optionally hide shows you've already watched.
 // @author       vishal
 // @match        https://app.trakt.tv/*
@@ -224,12 +224,10 @@
       border:none;border-radius:24px;padding:10px 16px;font:600 13px/1 system-ui,sans-serif;
       cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.4)}
     #tut-fab:hover{filter:brightness(1.1)}
-    #tut-overlay{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);
-      display:none;align-items:center;justify-content:center}
-    #tut-overlay.open{display:flex}
-    #tut-panel{width:min(1100px,94vw);height:88vh;background:#0b0b0d;color:#eee;border-radius:12px;
-      display:flex;flex-direction:column;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.6);
-      font-family:system-ui,sans-serif}
+    #tut-overlay{position:fixed;inset:0;z-index:2147483647;background:#0b0b0d;display:none}
+    #tut-overlay.open{display:block}
+    #tut-panel{width:100%;height:100%;background:#0b0b0d;color:#eee;border-radius:0;
+      display:flex;flex-direction:column;overflow:hidden;font-family:system-ui,sans-serif}
     #tut-head,#tut-foot{display:flex;align-items:center;gap:12px;padding:12px 16px;background:#141417}
     #tut-head{border-bottom:1px solid #222}
     #tut-foot{border-top:1px solid #222;justify-content:center}
