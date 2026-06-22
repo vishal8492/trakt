@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Trakt Uncapped Trending
 // @namespace    https://github.com/vishal/trakt-uncapped
-// @version      1.6.0
-// @description  Browse Trakt's most-watched shows (no 50-watcher floor) — paginated, jump-to-page, posters + ratings with IMDb links, optionally hide shows you've already watched.
+// @version      1.7.0
+// @description  Browse Trakt's most-watched shows & movies (no 50-watcher floor) — full-screen grid, jump-to-page, posters + ratings + IMDb links, optionally hide what you've watched.
 // @author       vishal
 // @match        https://app.trakt.tv/*
 // @match        https://trakt.tv/*
@@ -145,38 +145,38 @@
     return res.json.access_token;
   }
 
-  // ---- your watched shows: Set of trakt IDs for every show you've watched >=1 episode of ----
-  let watchedSet = null;
-  async function loadWatchedSet(access) {
+  // ---- your watched set: trakt IDs of everything you've watched, cached per media type ----
+  const watchedCache = { shows: null, movies: null };
+  async function loadWatchedSet(access, type) {
     const set = new Set();
     let p = 1, pc = 1;
     do {
-      const res = await gm(`${API}/sync/watched/shows?limit=1000&page=${p}`,
+      const res = await gm(`${API}/sync/watched/${type}?limit=1000&page=${p}`,
         Object.assign({}, traktHeaders, { Authorization: `Bearer ${access}` }));
       if (res.status === 401) { clearToken(); throw new Error('session expired — toggle again to re-login'); }
       if (res.status !== 200) throw new Error('Trakt sync ' + res.status);
-      (res.json || []).forEach((e) => { if (e.show && e.show.ids) set.add(e.show.ids.trakt); });
+      (res.json || []).forEach((e) => { const m = e.show || e.movie; if (m && m.ids) set.add(m.ids.trakt); });
       pc = parseInt(res.headers['x-pagination-page-count'] || '1', 10) || 1;
       p++;
     } while (p <= pc);
     return set;
   }
   async function ensureWatchedSet() {
-    if (watchedSet) return watchedSet;
+    if (watchedCache[mediaType]) return watchedCache[mediaType];
     let access = await validAccessToken();
     if (!access) access = await authenticate();
-    watchedSet = await loadWatchedSet(access);
-    return watchedSet;
+    watchedCache[mediaType] = await loadWatchedSet(access, mediaType);
+    return watchedCache[mediaType];
   }
 
   // ---- state ----
-  let page = 1, pageCount = 1, period = CONFIG.PERIOD, loading = false, hideWatched = false;
+  let page = 1, pageCount = 1, period = CONFIG.PERIOD, mediaType = 'shows', loading = false, hideWatched = false;
 
   async function fetchPage(p) {
-    // Source = shows/watched/{period}: ranked by unique watchers, NO floor (goes down to 1).
+    // Source = {shows|movies}/watched/{period}: ranked by unique watchers, NO floor (down to 1).
     // extended=full,images returns posters + Trakt rating + imdb id inline — no extra requests.
-    // Swap to `${API}/shows/trending?...` if you ever want the capped-at-50 official list.
-    const url = `${API}/shows/watched/${period}?page=${p}&limit=${CONFIG.PER_PAGE}&extended=full,images`;
+    // Swap to `${API}/${mediaType}/trending?...` if you ever want the capped-at-50 official list.
+    const url = `${API}/${mediaType}/watched/${period}?page=${p}&limit=${CONFIG.PER_PAGE}&extended=full,images`;
     const res = await gm(url, traktHeaders);
     if (res.status !== 200) throw new Error(`Trakt API ${res.status}`);
     pageCount = parseInt(res.headers['x-pagination-page-count'] || '1', 10) || 1;
@@ -233,7 +233,10 @@
     #tut-foot{border-top:1px solid #222;justify-content:center}
     #tut-head h2{margin:0;font-size:15px;font-weight:700;flex:0 0 auto}
     #tut-head .tut-tag{font-size:11px;color:#9a9a9a}
-    #tut-period{margin-left:auto;background:#222;color:#eee;border:1px solid #333;border-radius:6px;padding:6px 8px}
+    #tut-period{background:#222;color:#eee;border:1px solid #333;border-radius:6px;padding:6px 8px}
+    .tut-seg{margin-left:auto;display:inline-flex;border:1px solid #333;border-radius:6px;overflow:hidden}
+    .tut-seg button{background:#222;color:#cfcfcf;border:none;padding:6px 12px;font-size:13px;cursor:pointer}
+    .tut-seg button.active{background:#ed1c24;color:#fff;font-weight:600}
     #tut-hide-lbl{display:flex;align-items:center;gap:5px;font-size:12px;color:#cfcfcf;cursor:pointer;white-space:nowrap}
     #tut-hide{cursor:pointer;margin:0}
     #tut-close{background:none;border:none;color:#999;font-size:22px;cursor:pointer;line-height:1}
@@ -277,6 +280,10 @@
       <div id="tut-head">
         <h2>⚡ Uncapped Trending</h2>
         <span class="tut-tag">most-watched · no 50-floor · <span id="tut-ver"></span></span>
+        <span id="tut-type" class="tut-seg">
+          <button type="button" data-type="shows" class="active">Shows</button>
+          <button type="button" data-type="movies">Movies</button>
+        </span>
         <select id="tut-period">
           <option value="daily">Today</option>
           <option value="weekly">This week</option>
@@ -324,14 +331,15 @@
       let items = await fetchPage(page);
       items.forEach((it, i) => { it.__rank = (page - 1) * CONFIG.PER_PAGE + i + 1; });
       let hidden = 0;
-      if (hideWatched && watchedSet) {
+      const wset = watchedCache[mediaType];
+      if (hideWatched && wset) {
         const before = items.length;
-        items = items.filter((it) => !(it.show && it.show.ids && watchedSet.has(it.show.ids.trakt)));
+        items = items.filter((it) => { const m = it.show || it.movie; return !(m && m.ids && wset.has(m.ids.trakt)); });
         hidden = before - items.length;
       }
       grid.innerHTML = '';
       items.forEach((it, idx) => {
-        const s = it.show || {};
+        const s = it.show || it.movie || {};
         const ids = s.ids || {};
         const rank = it.__rank;
         const tr = traktRating(s);
@@ -342,7 +350,7 @@
         }
         const a = document.createElement('a');
         a.className = 'tut-card';
-        a.href = ids.slug ? `https://trakt.tv/shows/${ids.slug}` : '#';
+        a.href = ids.slug ? `https://trakt.tv/${mediaType}/${ids.slug}` : '#';
         a.target = '_blank';
         a.rel = 'noopener';
         a.innerHTML = `
@@ -395,7 +403,7 @@
           console.log(`[TUT] card#${i + 1} -> T/B: ${Math.round(r.top)}/${Math.round(r.bottom)} | L/R: ${Math.round(r.left)}/${Math.round(r.right)} | ${Math.round(r.width)}x${Math.round(r.height)}`);
         });
       }
-      setStatus(hideWatched && watchedSet && hidden ? `${hidden} watched hidden here` : '');
+      setStatus(hideWatched && watchedCache[mediaType] && hidden ? `${hidden} watched hidden here` : '');
     } catch (e) {
       status.textContent = String(e.message || e);
     } finally {
@@ -420,14 +428,26 @@
     if (e.key === 'Enter') { e.preventDefault(); goToPage(e.target.value); e.target.blur(); }
   });
   $('tut-period').addEventListener('change', (e) => { period = e.target.value; page = 1; render(); });
+  $('tut-type').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-type]');
+    if (!btn || btn.dataset.type === mediaType) return;
+    mediaType = btn.dataset.type;
+    Array.prototype.forEach.call($('tut-type').children, (b) => b.classList.toggle('active', b.dataset.type === mediaType));
+    page = 1;
+    if (hideWatched && !watchedCache[mediaType]) {
+      setStatus('Loading your watched ' + mediaType + '…');
+      try { await ensureWatchedSet(); } catch (err) { setStatus('Could not load watched: ' + (err.message || err)); }
+    }
+    render();
+  });
   $('tut-hide').addEventListener('change', async (e) => {
     hideWatched = e.target.checked;
-    if (hideWatched && !watchedSet) {
+    if (hideWatched && !watchedCache[mediaType]) {
       e.target.disabled = true;
       setStatus('Connecting to Trakt…');
       try {
         await ensureWatchedSet();
-        setStatus(`Loaded ${watchedSet.size} watched shows — filtering…`);
+        setStatus(`Loaded ${watchedCache[mediaType].size} watched ${mediaType} — filtering…`);
       } catch (err) {
         hideWatched = false; e.target.checked = false; e.target.disabled = false;
         setStatus('Could not enable: ' + (err.message || err));
