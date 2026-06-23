@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trakt Uncapped Trending
 // @namespace    https://github.com/vishal/trakt-uncapped
-// @version      1.8.0
+// @version      1.10.1
 // @description  Browse Trakt's most-watched shows & movies (no 50-watcher floor) — full-screen grid, jump-to-page, posters + ratings + IMDb links, optionally hide what you've watched.
 // @author       vishal
 // @match        https://app.trakt.tv/*
@@ -29,8 +29,10 @@
     CLIENT_SECRET: '',     // only needed for "Hide watched"
     OMDB_API_KEY: '',      // optional — real IMDb rating numbers (free key at omdbapi.com)
     PERIOD: 'daily',       // default window: daily | weekly | monthly | yearly | all
-    PER_PAGE: 24,          // cards per page (also = how many shows fetched per request)
+    PER_PAGE: 24,          // cards shown per page
+    FETCH_BATCH: 48,       // items fetched per API call (multiple of PER_PAGE; bigger = fewer calls)
     POSTER_SIZE: 'medium', // thumb | medium | full  (posters come straight from Trakt's CDN)
+    DEFAULT_HIDE_WATCHED: true, // start with "Hide watched" ON (triggers the one-time Trakt login on first open)
     DEBUG: false,          // set true to log the first card's data to the console (F12)
   };
   // ================================================================
@@ -161,38 +163,87 @@
     } while (p <= pc);
     return set;
   }
+  // Shows use CLIENT-SIDE filtering: Trakt's server-side ignore_watched skips partially-watched shows,
+  // so we filter against the full watched set instead. Movies have no "partial" → server-side is fine.
+  const usesClientFilter = (type) => type === 'shows';
   async function ensureWatchedSet() {
-    if (watchedCache[mediaType]) return watchedCache[mediaType];
     let access = await validAccessToken();
-    if (!access) access = await authenticate();
-    watchedCache[mediaType] = await loadWatchedSet(access, mediaType);
-    return watchedCache[mediaType];
+    if (!access) access = await authenticate();   // token needed either way (movies flag / shows fetch)
+    if (usesClientFilter(mediaType) && !watchedCache[mediaType]) {
+      watchedCache[mediaType] = await loadWatchedSet(access, mediaType);
+    }
+    return access;
   }
 
   // ---- state ----
-  let page = 1, pageCount = 1, period = CONFIG.PERIOD, mediaType = 'shows', loading = false, hideWatched = false;
+  let period = CONFIG.PERIOD, mediaType = 'shows', loading = false, hideWatched = !!CONFIG.DEFAULT_HIDE_WATCHED;
+  const FETCH = Math.max(CONFIG.PER_PAGE, CONFIG.FETCH_BATCH || CONFIG.PER_PAGE * 2);
 
-  async function fetchPage(p) {
-    // Source = {shows|movies}/watched/{period}: ranked by unique watchers, NO floor (down to 1).
-    // extended=full,images returns posters + Trakt rating + imdb id inline — no extra requests.
+  // Pagination = a forward "stream": fetch FETCH-sized batches, filter watched, serve PER_PAGE at a time.
+  // built[] caches pages produced since the last anchor; basePage = page number of built[0].
+  // Prev/Next walk the stream (full pages, items fetched once). A jump re-anchors the stream to the
+  // batch at ~rank (page-1)*PER_PAGE (FETCH is a multiple of PER_PAGE so the skip is exact).
+  let page = 1, basePage = 1, totalPages = 1;
+  const built = [];
+  const stream = { raw: [], pos: 0, apiPage: 1, apiCount: Infinity, skip: 0, exhausted: false };
+
+  async function fetchApiPage(apiPageNo) {
     let headers = traktHeaders, extra = '';
-    // When hiding watched, also ask Trakt to exclude them SERVER-SIDE (keeps pages full). Needs the
-    // OAuth token. If the flag isn't honored, render()'s client-side filter still removes them — so
-    // this is purely additive: behaves at least as well as the client-side-only approach.
-    if (hideWatched) {
+    // Movies: exclude watched SERVER-SIDE via ignore_watched. Shows: filtered client-side in keep().
+    if (hideWatched && !usesClientFilter(mediaType)) {
       const access = await validAccessToken();
       if (access) { headers = Object.assign({}, traktHeaders, { Authorization: `Bearer ${access}` }); extra = '&ignore_watched=true'; }
-      console.log(access)
     }
-    const url = `${API}/${mediaType}/watched/${period}?page=${p}&limit=${CONFIG.PER_PAGE}&extended=full,images${extra}`;
-    console.log(url)
-
+    const url = `${API}/${mediaType}/watched/${period}?page=${apiPageNo}&limit=${FETCH}&extended=full,images${extra}`;
     const res = await gm(url, headers);
     if (res.status !== 200) throw new Error(`Trakt API ${res.status}`);
-    pageCount = parseInt(res.headers['x-pagination-page-count'] || '1', 10) || 1;
-    console.log(res.json)
-    return res.json || [];
+    stream.apiCount = parseInt(res.headers['x-pagination-page-count'] || '1', 10) || 1;
+    const itemCount = parseInt(res.headers['x-pagination-item-count'] || '0', 10) || 0;
+    totalPages = Math.max(1, itemCount ? Math.ceil(itemCount / CONFIG.PER_PAGE) : stream.apiCount);
+    const raw = res.json || [];
+    raw.forEach((it, i) => { it.__rank = (apiPageNo - 1) * FETCH + i + 1; });
+    return raw;
   }
+
+  // true = keep this item (drop the shows you've watched; movies are filtered server-side)
+  function keep(it) {
+    if (hideWatched && usesClientFilter(mediaType)) {
+      const wset = watchedCache[mediaType], m = it.show || it.movie;
+      if (wset && m && m.ids && wset.has(m.ids.trakt)) return false;
+    }
+    return true;
+  }
+
+  // pull the next PER_PAGE kept items from the stream, fetching batches as needed
+  async function collectPage() {
+    const out = [];
+    while (out.length < CONFIG.PER_PAGE) {
+      if (stream.pos >= stream.raw.length) {
+        if (stream.apiPage > stream.apiCount) { stream.exhausted = true; break; }
+        const raw = await fetchApiPage(stream.apiPage);
+        stream.apiPage++;
+        if (!raw.length) { stream.exhausted = true; break; }
+        stream.raw.push(...raw);
+        if (stream.skip) { stream.pos += stream.skip; stream.skip = 0; }
+        continue;
+      }
+      const it = stream.raw[stream.pos++];
+      if (keep(it)) out.push(it);
+    }
+    return out;
+  }
+
+  // position the stream so the next collectPage() starts ~rank (toPage-1)*PER_PAGE
+  function anchorStream(toPage) {
+    const startRank = (toPage - 1) * CONFIG.PER_PAGE; // 0-based
+    stream.raw = [];
+    stream.pos = 0;
+    stream.apiPage = Math.floor(startRank / FETCH) + 1;
+    stream.skip = startRank % FETCH;                  // 0 or PER_PAGE when FETCH = 2*PER_PAGE
+    stream.apiCount = Infinity;
+    stream.exhausted = false;
+  }
+  function resetStream() { anchorStream(1); built.length = 0; basePage = 1; page = 1; }
 
   // ---- helpers ----
   // Posters come straight from Trakt's CDN (extended=images). URLs arrive scheme-less and at
@@ -290,7 +341,6 @@
     <div id="tut-panel">
       <div id="tut-head">
         <h2>⚡ Uncapped Trending</h2>
-        <span class="tut-tag">most-watched · no 50-floor · <span id="tut-ver"></span></span>
         <span id="tut-type" class="tut-seg">
           <button type="button" data-type="shows" class="active">Shows</button>
           <button type="button" data-type="movies">Movies</button>
@@ -323,8 +373,9 @@
   const $ = (id) => document.getElementById(id);
   const grid = $('tut-grid'), status = $('tut-status'), pageinfo = $('tut-pageinfo');
   const setStatus = (m) => { status.textContent = m || ''; };
-  $('tut-ver').textContent = 'v' + (typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : '?');
+  { const ver = $('tut-ver'); if (ver) ver.textContent = 'v' + (typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : '?'); }
   $('tut-period').value = period;
+  $('tut-hide').checked = hideWatched;
 
   async function render() {
     if (loading) return;
@@ -339,15 +390,17 @@
       return;
     }
     try {
-      let items = await fetchPage(page);
-      items.forEach((it, i) => { it.__rank = (page - 1) * CONFIG.PER_PAGE + i + 1; });
-      let hidden = 0;
-      const wset = watchedCache[mediaType];
-      if (hideWatched && wset) {
-        const before = items.length;
-        items = items.filter((it) => { const m = it.show || it.movie; return !(m && m.ids && wset.has(m.ids.trakt)); });
-        hidden = before - items.length;
+      // ensure built[] holds the requested page; re-anchor the stream on a non-adjacent jump
+      const idx0 = page - basePage;
+      if (idx0 < 0 || idx0 > built.length) { anchorStream(page); built.length = 0; basePage = page; }
+      while (built.length < (page - basePage + 1)) {
+        if (stream.exhausted) break;
+        const pg = await collectPage();
+        if (pg.length === 0) { stream.exhausted = true; break; }
+        built.push(pg);
       }
+      if (page - basePage >= built.length) page = basePage + Math.max(0, built.length - 1); // clamp past end
+      const items = built[page - basePage] || [];
       grid.innerHTML = '';
       items.forEach((it, idx) => {
         const s = it.show || it.movie || {};
@@ -398,23 +451,14 @@
         }
         grid.appendChild(a);
       });
+      const atEnd = stream.exhausted && (page - basePage) >= built.length - 1;
       $('tut-pagenum').value = page;
-      $('tut-pagenum').max = pageCount;
-      $('tut-pagecount').textContent = pageCount.toLocaleString();
+      $('tut-pagenum').max = totalPages;
+      $('tut-pagecount').textContent = totalPages.toLocaleString();
       $('tut-prev').disabled = page <= 1;
-      $('tut-next').disabled = page >= pageCount;
+      $('tut-next').disabled = atEnd;
       grid.scrollTop = 0;
-      if (CONFIG.DEBUG) {
-        const cards = Array.prototype.slice.call(grid.querySelectorAll('.tut-card'));
-        const gs = getComputedStyle(grid);
-        console.log('[TUT] cards:', cards.length, '| cols:', gs.gridTemplateColumns,
-          '| auto-rows:', gs.gridAutoRows, '| align-items:', gs.alignItems);
-        cards.slice(0, 8).forEach((c, i) => {
-          const r = c.getBoundingClientRect();
-          console.log(`[TUT] card#${i + 1} -> T/B: ${Math.round(r.top)}/${Math.round(r.bottom)} | L/R: ${Math.round(r.left)}/${Math.round(r.right)} | ${Math.round(r.width)}x${Math.round(r.height)}`);
-        });
-      }
-      setStatus(hideWatched && watchedCache[mediaType] && hidden ? `${hidden} watched hidden here` : '');
+      setStatus(atEnd ? 'End of list' : '');
     } catch (e) {
       status.textContent = String(e.message || e);
     } finally {
@@ -425,54 +469,63 @@
 
   // ---- wiring ----
   function goToPage(n) {
-    const target = Math.max(1, Math.min(pageCount, parseInt(n, 10) || 1));
+    const target = Math.max(1, Math.min(totalPages, parseInt(n, 10) || 1));
     $('tut-pagenum').value = target;
     if (target !== page) { page = target; render(); }
   }
 
-  fab.addEventListener('click', () => { overlay.classList.add('open'); if (!grid.children.length) render(); });
+  fab.addEventListener('click', async () => {
+    overlay.classList.add('open');
+    if (grid.children.length) return;                 // already loaded once
+    if (hideWatched) {                                // default-on: get watched data ready before first render
+      setStatus('Preparing…');
+      try { await ensureWatchedSet(); }
+      catch (err) { hideWatched = false; $('tut-hide').checked = false; setStatus('Hide watched off — ' + (err.message || err)); }
+    }
+    render();
+  });
   $('tut-close').addEventListener('click', () => overlay.classList.remove('open'));
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
   $('tut-prev').addEventListener('click', () => { if (page > 1) { page--; render(); } });
-  $('tut-next').addEventListener('click', () => { if (page < pageCount) { page++; render(); } });
+  $('tut-next').addEventListener('click', () => { page++; render(); });
   $('tut-pagenum').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); goToPage(e.target.value); e.target.blur(); }
   });
-  $('tut-period').addEventListener('change', (e) => { period = e.target.value; page = 1; render(); });
+  $('tut-period').addEventListener('change', (e) => { period = e.target.value; resetStream(); render(); });
   $('tut-type').addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-type]');
     if (!btn || btn.dataset.type === mediaType) return;
     mediaType = btn.dataset.type;
     Array.prototype.forEach.call($('tut-type').children, (b) => b.classList.toggle('active', b.dataset.type === mediaType));
-    page = 1;
-    if (hideWatched && !watchedCache[mediaType]) {
-      setStatus('Loading your watched ' + mediaType + '…');
-      try { await ensureWatchedSet(); } catch (err) { setStatus('Could not load watched: ' + (err.message || err)); }
+    if (hideWatched) {
+      setStatus('Preparing ' + mediaType + '…');
+      try { await ensureWatchedSet(); } catch (err) { setStatus('Could not prepare: ' + (err.message || err)); }
     }
+    resetStream();
     render();
   });
   $('tut-hide').addEventListener('change', async (e) => {
     hideWatched = e.target.checked;
-    if (hideWatched && !watchedCache[mediaType]) {
+    if (hideWatched) {
       e.target.disabled = true;
       setStatus('Connecting to Trakt…');
       try {
         await ensureWatchedSet();
-        setStatus(`Loaded ${watchedCache[mediaType].size} watched ${mediaType} — filtering…`);
       } catch (err) {
         hideWatched = false; e.target.checked = false; e.target.disabled = false;
         setStatus('Could not enable: ' + (err.message || err));
-        return;
+        resetStream(); render(); return;
       }
       e.target.disabled = false;
     }
+    resetStream();
     render();
   });
   document.addEventListener('keydown', (e) => {
     if (!overlay.classList.contains('open')) return;
     if (e.key === 'Escape') { overlay.classList.remove('open'); return; }
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return; // typing a page #
-    if (e.key === 'ArrowRight' && page < pageCount) { page++; render(); }
+    if (e.key === 'ArrowRight') { page++; render(); }
     else if (e.key === 'ArrowLeft' && page > 1) { page--; render(); }
   });
 })();
