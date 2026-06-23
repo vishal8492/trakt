@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Trakt Uncapped Trending
 // @namespace    https://github.com/vishal/trakt-uncapped
-// @version      1.7.0
+// @version      1.8.0
 // @description  Browse Trakt's most-watched shows & movies (no 50-watcher floor) — full-screen grid, jump-to-page, posters + ratings + IMDb links, optionally hide what you've watched.
 // @author       vishal
 // @match        https://app.trakt.tv/*
@@ -175,11 +175,22 @@
   async function fetchPage(p) {
     // Source = {shows|movies}/watched/{period}: ranked by unique watchers, NO floor (down to 1).
     // extended=full,images returns posters + Trakt rating + imdb id inline — no extra requests.
-    // Swap to `${API}/${mediaType}/trending?...` if you ever want the capped-at-50 official list.
-    const url = `${API}/${mediaType}/watched/${period}?page=${p}&limit=${CONFIG.PER_PAGE}&extended=full,images`;
-    const res = await gm(url, traktHeaders);
+    let headers = traktHeaders, extra = '';
+    // When hiding watched, also ask Trakt to exclude them SERVER-SIDE (keeps pages full). Needs the
+    // OAuth token. If the flag isn't honored, render()'s client-side filter still removes them — so
+    // this is purely additive: behaves at least as well as the client-side-only approach.
+    if (hideWatched) {
+      const access = await validAccessToken();
+      if (access) { headers = Object.assign({}, traktHeaders, { Authorization: `Bearer ${access}` }); extra = '&ignore_watched=true'; }
+      console.log(access)
+    }
+    const url = `${API}/${mediaType}/watched/${period}?page=${p}&limit=${CONFIG.PER_PAGE}&extended=full,images${extra}`;
+    console.log(url)
+
+    const res = await gm(url, headers);
     if (res.status !== 200) throw new Error(`Trakt API ${res.status}`);
     pageCount = parseInt(res.headers['x-pagination-page-count'] || '1', 10) || 1;
+    console.log(res.json)
     return res.json || [];
   }
 
@@ -363,17 +374,7 @@
             <div class="tut-stats">
               <span class="tut-stat tut-trakt" title="Trakt rating">⭐ ${tr || '–'}</span>
               <span class="tut-stat tut-watchers" title="Watchers in this window">👁 ${watchersOf(it).toLocaleString()}</span>
-                 ${
-      imdb
-        ? `<a
-             href="https://www.imdb.com/title/${imdb}/"
-             target="_blank"
-             rel="noopener noreferrer"
-             class="tut-stat tut-imdb"
-             title="Open on IMDb"
-           >IMDb ↗</a>`
-        : `<span class="tut-stat tut-imdb" title="No IMDb id">IMDb –</span>`
-    }
+              <span class="tut-stat tut-imdb" title="${imdb ? 'Open on IMDb' : 'No IMDb id'}">IMDb${imdb ? ' ↗' : ' –'}</span>
             </div>
           </div>`;
         // poster (CSP-safe: set via JS property, not inline style attr)
