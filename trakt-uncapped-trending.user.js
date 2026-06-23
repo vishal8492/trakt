@@ -427,7 +427,17 @@
             <div class="tut-stats">
               <span class="tut-stat tut-trakt" title="Trakt rating">⭐ ${tr || '–'}</span>
               <span class="tut-stat tut-watchers" title="Watchers in this window">👁 ${watchersOf(it).toLocaleString()}</span>
-              <span class="tut-stat tut-imdb" title="${imdb ? 'Open on IMDb' : 'No IMDb id'}">IMDb${imdb ? ' ↗' : ' –'}</span>
+               ${
+      imdb
+        ? `<a
+             href="https://www.imdb.com/title/${imdb}/"
+             target="_blank"
+             rel="noopener noreferrer"
+             class="tut-stat tut-imdb"
+             title="Open on IMDb"
+           >IMDb ↗</a>`
+        : `<span class="tut-stat tut-imdb" title="No IMDb id">IMDb –</span>`
+    }
             </div>
           </div>`;
         // poster (CSP-safe: set via JS property, not inline style attr)
